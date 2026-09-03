@@ -1,0 +1,55 @@
+name: FPL Fixture Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview first; Execute imports into the website
+        required: true
+        default: preview
+        type: choice
+        options: [preview, execute]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Tests
+        run: pytest -q
+      - name: Run bot
+        env:
+          WEBSITE_URL: ${{ secrets.WEBSITE_URL }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          ADMIN_LOGIN_PATH: ${{ secrets.ADMIN_LOGIN_PATH }}
+          ADMIN_PAGE_PATH: ${{ secrets.ADMIN_PAGE_PATH }}
+          BOT_API_PATH: ${{ secrets.BOT_API_PATH }}
+          BOT_API_TOKEN: ${{ secrets.BOT_API_TOKEN }}
+          SITE_TIMEZONE: ${{ secrets.SITE_TIMEZONE }}
+          HEADLESS: 'true'
+          IMPORT_CONFIRM: ${{ inputs.mode == 'execute' && 'true' || 'false' }}
+        run: |
+          if [ "${{ inputs.mode }}" = "execute" ]; then
+            python -m bot.main --execute
+          else
+            python -m bot.main
+          fi
+      - name: Upload generated SQL and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpl-fixture-bot-results
+          path: |
+            sql/*.sql
+            reports/*
+          if-no-files-found: ignore

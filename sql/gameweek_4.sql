@@ -1,0 +1,122 @@
+INSERT INTO matches (home_team, home_team_pic, away_team, away_team_pic, match_date, home_score, away_score, gameweek, deadline, competition)
+VALUES
+(
+    'Aston Villa',
+    '/PL_Teams/aston-villa.png',
+    'Nott''m Forest',
+    '/PL_Teams/nottingham-forest.png',
+    '2026-09-12 15:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Bournemouth',
+    '/PL_Teams/bournemouth.png',
+    'Brentford',
+    '/PL_Teams/brentford.png',
+    '2026-09-12 15:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Chelsea',
+    '/PL_Teams/chelsea.png',
+    'Hull City',
+    '/PL_Teams/hull-city.png',
+    '2026-09-12 15:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Crystal Palace',
+    '/PL_Teams/crystal-palace.png',
+    'Ipswich Town',
+    '/PL_Teams/ipswich-town.png',
+    '2026-09-12 15:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Liverpool',
+    '/PL_Teams/liverpool.png',
+    'Fulham',
+    '/PL_Teams/fulham.png',
+    '2026-09-12 15:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Spurs',
+    '/PL_Teams/tottenham.png',
+    'Everton',
+    '/PL_Teams/everton.png',
+    '2026-09-12 17:30:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Sunderland',
+    '/PL_Teams/sunderland.png',
+    'Arsenal',
+    '/PL_Teams/arsenal.png',
+    '2026-09-12 20:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Coventry City',
+    '/PL_Teams/coventry-city.png',
+    'Brighton',
+    '/PL_Teams/brighton.png',
+    '2026-09-13 14:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Man Utd',
+    '/PL_Teams/manchester-united.png',
+    'Man City',
+    '/PL_Teams/manchester-city.png',
+    '2026-09-13 16:30:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+),
+(
+    'Leeds',
+    '/PL_Teams/leeds.png',
+    'Newcastle',
+    '/PL_Teams/newcastle.png',
+    '2026-09-14 20:00:00',
+    NULL,
+    NULL,
+    4,
+    NULL,
+    'Premier League'
+);

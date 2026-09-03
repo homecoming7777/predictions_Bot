@@ -1,0 +1,2 @@
+-- No new table is required.
+-- Your existing matches table and gameweek_deadlines table are used.
