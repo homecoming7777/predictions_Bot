@@ -1,0 +1,18 @@
+Activate the virtual environment:
+.\.venv\Scripts\Activate.ps1
+
+If PowerShell blocks activation, use:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+
+Run the tests first:
+pytest -q
+
+Run a PREVIEW:
+python -m bot.main
+
+
+
+If PREVIEW is successful → EXECUTE
+Only do this after preview succeeds:
+python -m bot.main --execute
