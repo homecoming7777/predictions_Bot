@@ -1,67 +1,117 @@
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
+ROOT = Path(__file__).resolve().parent.parent
+
+load_dotenv(ROOT / ".env")
 
 
-def env_bool(name, default=False):
-    v = os.getenv(name)
-    return default if v is None else v.strip().lower() in {"1", "true", "yes", "on"}
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+
+    if value is None:
+        return default
+
+    return value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 @dataclass(frozen=True)
 class Config:
     website_url: str
+
     admin_email: str
     admin_password: str
-    login_path: str
-    admin_path: str
-    site_api_path: str
+
+    admin_login_path: str
+    admin_page_path: str
+    bot_api_path: str
+
     bot_api_token: str
+
     site_timezone: str
+
     headless: bool
     import_confirm: bool
     allow_unsafe_site: bool
 
-    @property
-    def login_url(self):
-        return self.website_url.rstrip("/") + "/" + self.login_path.lstrip("/")
+    # Backup result provider
+    sportmonks_api_token: str
 
     @property
-    def admin_url(self):
-        return self.website_url.rstrip("/") + "/" + self.admin_path.lstrip("/")
-
-    @property
-    def api_url(self):
-        return self.website_url.rstrip("/") + "/" + self.site_api_path.lstrip("/")
+    def sportmonks_enabled(self) -> bool:
+        return bool(self.sportmonks_api_token.strip())
 
 
-def load_config():
-    c = Config(
-        os.getenv("WEBSITE_URL", "").strip(),
-        os.getenv("ADMIN_EMAIL", "").strip(),
-        os.getenv("ADMIN_PASSWORD", ""),
-        os.getenv("ADMIN_LOGIN_PATH", "/login.php"),
-        os.getenv("ADMIN_PAGE_PATH", "/myAdmin.php"),
-        os.getenv("BOT_API_PATH", "/bot_api.php"),
-        os.getenv("BOT_API_TOKEN", ""),
-        os.getenv("SITE_TIMEZONE", "Africa/Casablanca"),
-        env_bool("HEADLESS", True),
-        env_bool("IMPORT_CONFIRM", False),
-        env_bool("ALLOW_UNSAFE_SITE", False),
+def load_config() -> Config:
+    required = {
+        "WEBSITE_URL": os.getenv("WEBSITE_URL"),
+        "ADMIN_EMAIL": os.getenv("ADMIN_EMAIL"),
+        "ADMIN_PASSWORD": os.getenv("ADMIN_PASSWORD"),
+        "BOT_API_PATH": os.getenv("BOT_API_PATH"),
+        "BOT_API_TOKEN": os.getenv("BOT_API_TOKEN"),
+        "SITE_TIMEZONE": os.getenv("SITE_TIMEZONE"),
+    }
+
+    missing = [
+        name
+        for name, value in required.items()
+        if not value or not value.strip()
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: "
+            + ", ".join(missing)
+        )
+
+    return Config(
+        website_url=required["WEBSITE_URL"].rstrip("/"),
+
+        admin_email=required["ADMIN_EMAIL"],
+        admin_password=required["ADMIN_PASSWORD"],
+
+        admin_login_path=(
+            os.getenv("ADMIN_LOGIN_PATH")
+            or "/admin/login.php"
+        ),
+
+        admin_page_path=(
+            os.getenv("ADMIN_PAGE_PATH")
+            or "/admin.php"
+        ),
+
+        bot_api_path=required["BOT_API_PATH"],
+
+        bot_api_token=required["BOT_API_TOKEN"],
+
+        site_timezone=required["SITE_TIMEZONE"],
+
+        headless=env_bool(
+            "HEADLESS",
+            True,
+        ),
+
+        import_confirm=env_bool(
+            "IMPORT_CONFIRM",
+            False,
+        ),
+
+        allow_unsafe_site=env_bool(
+            "ALLOW_UNSAFE_SITE",
+            False,
+        ),
+
+        sportmonks_api_token=(
+            os.getenv("SPORTMONKS_API_TOKEN")
+            or ""
+        ).strip(),
     )
-
-    if not c.website_url:
-        raise ValueError("WEBSITE_URL is required.")
-
-    if not c.admin_email or not c.admin_password:
-        raise ValueError("ADMIN_EMAIL and ADMIN_PASSWORD are required.")
-
-    if not c.bot_api_token:
-        raise ValueError("BOT_API_TOKEN is required.")
-
-    return c

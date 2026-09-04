@@ -43,13 +43,22 @@ jobs:
           WEBSITE_URL: ${{ secrets.WEBSITE_URL }}
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
           ADMIN_LOGIN_PATH: ${{ secrets.ADMIN_LOGIN_PATH }}
           ADMIN_PAGE_PATH: ${{ secrets.ADMIN_PAGE_PATH }}
+
           BOT_API_PATH: ${{ secrets.BOT_API_PATH }}
           BOT_API_TOKEN: ${{ secrets.BOT_API_TOKEN }}
+
           SITE_TIMEZONE: ${{ secrets.SITE_TIMEZONE }}
+
+          SPORTMONKS_API_TOKEN: ${{ secrets.SPORTMONKS_API_TOKEN }}
+
           HEADLESS: "true"
+
+          # Keep the existing dangerous-site protection behavior.
           ALLOW_UNSAFE_SITE: "true"
+
           IMPORT_CONFIRM: ${{ inputs.mode == 'execute' && 'true' || 'false' }}
 
         run: |

@@ -9,14 +9,24 @@ from .fixtures import normalize, validate
 from .sql_generator import generate, save
 from .site import Site
 from . import results as results_mod
+from .backup_results import (
+    SportmonksClient,
+    find_final_result_for_match,
+)
 
 
 def save_report(result, gameweek=None):
     reports_dir = Path("reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
+
+    reports_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     if gameweek is not None:
-        filename = f"gameweek_{gameweek}_report.json"
+        filename = (
+            f"gameweek_{gameweek}_report.json"
+        )
     else:
         filename = "bot_report.json"
 
@@ -40,7 +50,9 @@ def finish(result, gameweek=None):
         gameweek,
     )
 
-    result["report_file"] = str(report_path)
+    result["report_file"] = str(
+        report_path
+    )
 
     report_path.write_text(
         json.dumps(
@@ -59,12 +71,130 @@ def finish(result, gameweek=None):
     )
 
 
-def check_and_apply_results(site, config, latest, dry, result):
+def fetch_backup_results(
+    config,
+    pending,
+    summary,
+):
+    """
+    Query Sportmonks for every pending site match.
 
+    A failed backup API request does NOT automatically fail the entire bot.
+    The match simply remains pending unless FPL already has a safe result.
+    """
+
+    backup_results = {}
+
+    summary["backup_api"] = {
+        "enabled": bool(
+            config.sportmonks_enabled
+        ),
+        "provider": "sportmonks",
+        "checked": 0,
+        "final": 0,
+        "waiting": 0,
+        "errors": 0,
+        "ambiguous": 0,
+    }
+
+    if not config.sportmonks_enabled:
+        return backup_results
+
+    try:
+        client = SportmonksClient(
+            config.sportmonks_api_token
+        )
+    except Exception as exc:
+        summary["backup_api"].update(
+            {
+                "errors": 1,
+                "error": (
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            }
+        )
+
+        return backup_results
+
+    for match in pending:
+
+        summary["backup_api"]["checked"] += 1
+
+        try:
+            response = find_final_result_for_match(
+                client,
+                match,
+            )
+
+            if response is None:
+                summary["backup_api"]["waiting"] += 1
+                continue
+
+            status = response.get(
+                "status"
+            )
+
+            if status == "final":
+                backup_results[
+                    match["id"]
+                ] = response
+
+                summary["backup_api"]["final"] += 1
+
+            elif status == "ambiguous":
+                summary["backup_api"][
+                    "ambiguous"
+                ] += 1
+
+            elif status == "error":
+                summary["backup_api"][
+                    "errors"
+                ] += 1
+
+            else:
+                summary["backup_api"][
+                    "waiting"
+                ] += 1
+
+        except Exception as exc:
+            summary["backup_api"][
+                "errors"
+            ] += 1
+
+            summary.setdefault(
+                "backup_errors",
+                [],
+            ).append(
+                {
+                    "match_id": match.get("id"),
+                    "home_team": match.get(
+                        "home_team"
+                    ),
+                    "away_team": match.get(
+                        "away_team"
+                    ),
+                    "error": (
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                }
+            )
+
+    return backup_results
+
+
+def check_and_apply_results(
+    site,
+    config,
+    latest,
+    dry,
+    result,
+):
     summary = {
         "checked_gameweek": latest,
         "pending_before": 0,
         "updated": [],
+        "waiting": [],
+        "discrepancies": [],
         "still_pending_after": [],
     }
 
@@ -72,63 +202,249 @@ def check_and_apply_results(site, config, latest, dry, result):
         result["results"] = summary
         return True
 
-    matches_resp = site.api("matches", latest)
-    matches = matches_resp.get("matches", [])
+    matches_resp = site.api(
+        "matches",
+        latest,
+    )
 
-    pending = results_mod.pending_matches(matches)
-    summary["pending_before"] = len(pending)
+    matches = matches_resp.get(
+        "matches",
+        [],
+    )
 
-    updates = []
+    pending = results_mod.pending_matches(
+        matches
+    )
 
-    if pending:
-        fpl = FPLClient()
-        teams = team_names(fpl.bootstrap())
-        raw = fpl.fixtures(latest)
+    summary["pending_before"] = len(
+        pending
+    )
 
-        fpl_index = results_mod.build_fpl_results_index(raw, teams)
-        updates = results_mod.finished_updates(pending, fpl_index)
+    # If there is nothing to reconcile, the gameweek is complete.
+    if not pending:
+        summary["still_pending_after"] = []
 
-        if dry:
-            summary["would_update"] = updates
-        else:
-            applied = []
+        result["results"] = summary
 
-            for u in updates:
-                site.save_result(
-                    u["match_id"],
-                    latest,
-                    u["home_score"],
-                    u["away_score"],
-                )
+        return True
 
-                verify_resp = site.api("matches", latest)
-                verify_row = next(
-                    (
-                        m for m in verify_resp.get("matches", [])
-                        if m.get("id") == u["match_id"]
-                    ),
-                    None,
-                )
+    # -------------------------------
+    # Primary source: FPL
+    # -------------------------------
 
-                if (
-                    verify_row is None
-                    or verify_row.get("home_score") != u["home_score"]
-                    or verify_row.get("away_score") != u["away_score"]
-                ):
-                    raise RuntimeError(
-                        f"Result verification failed for match "
-                        f"{u['match_id']} "
-                        f"({u['home_team']} vs {u['away_team']})."
+    fpl = FPLClient()
+
+    teams = team_names(
+        fpl.bootstrap()
+    )
+
+    raw = fpl.fixtures(
+        latest
+    )
+
+    fpl_index = (
+        results_mod.build_fpl_results_index(
+            raw,
+            teams,
+        )
+    )
+
+    # -------------------------------
+    # Backup source: Sportmonks
+    # -------------------------------
+
+    backup_results = fetch_backup_results(
+        config,
+        pending,
+        summary,
+    )
+
+    # -------------------------------
+    # Compare providers
+    # -------------------------------
+
+    decisions = []
+
+    for match in pending:
+
+        fpl_result = (
+            results_mod.get_fpl_result(
+                match,
+                fpl_index,
+            )
+        )
+
+        backup_result = (
+            backup_results.get(
+                match["id"]
+            )
+        )
+
+        decision = (
+            results_mod.compare_results(
+                match,
+                fpl_result,
+                backup_result,
+            )
+        )
+
+        decisions.append(
+            decision
+        )
+
+    updates = [
+        d
+        for d in decisions
+        if d["status"] == "update"
+    ]
+
+    waiting = [
+        d
+        for d in decisions
+        if d["status"] == "waiting"
+    ]
+
+    discrepancies = [
+        d
+        for d in decisions
+        if d["status"] == "discrepancy"
+    ]
+
+    summary["waiting"] = waiting
+
+    summary["discrepancies"] = (
+        discrepancies
+    )
+
+    if dry:
+        summary["would_update"] = updates
+
+    else:
+        applied = []
+
+        for update in updates:
+
+            site.save_result(
+                update["match_id"],
+                latest,
+                update["home_score"],
+                update["away_score"],
+            )
+
+            # Re-read the website after each update
+            # and verify that the actual database value
+            # is what we intended to save.
+            verify_resp = site.api(
+                "matches",
+                latest,
+            )
+
+            verify_row = next(
+                (
+                    m
+                    for m in verify_resp.get(
+                        "matches",
+                        [],
                     )
+                    if m.get("id")
+                    == update["match_id"]
+                ),
+                None,
+            )
 
-                applied.append(u)
+            if verify_row is None:
+                raise RuntimeError(
+                    "Result verification failed: "
+                    f"match {update['match_id']} "
+                    "was not returned by the website."
+                )
 
-            summary["updated"] = applied
+            try:
+                verified_home = int(
+                    verify_row.get(
+                        "home_score"
+                    )
+                )
 
-    updated_ids = {u["match_id"] for u in updates}
-    still_pending = [m["id"] for m in pending if m["id"] not in updated_ids]
+                verified_away = int(
+                    verify_row.get(
+                        "away_score"
+                    )
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                raise RuntimeError(
+                    "Result verification failed: "
+                    f"match {update['match_id']} "
+                    "returned invalid scores."
+                )
 
-    summary["still_pending_after"] = still_pending
+            if (
+                verified_home
+                != update["home_score"]
+                or
+                verified_away
+                != update["away_score"]
+            ):
+                raise RuntimeError(
+                    "Result verification failed for "
+                    f"match {update['match_id']} "
+                    f"({update['home_team']} vs "
+                    f"{update['away_team']}). "
+                    f"Expected "
+                    f"{update['home_score']}-"
+                    f"{update['away_score']}, "
+                    f"website has "
+                    f"{verified_home}-"
+                    f"{verified_away}."
+                )
+
+            applied.append(
+                update
+            )
+
+        summary["updated"] = applied
+
+    # -------------------------------
+    # Re-check the website AFTER updates
+    # -------------------------------
+
+    if dry:
+        updated_ids = {
+            d["match_id"]
+            for d in updates
+        }
+
+        still_pending = [
+            m["id"]
+            for m in pending
+            if m["id"]
+            not in updated_ids
+        ]
+
+    else:
+        final_resp = site.api(
+            "matches",
+            latest,
+        )
+
+        final_matches = final_resp.get(
+            "matches",
+            [],
+        )
+
+        still_pending = [
+            m["id"]
+            for m in final_matches
+            if m.get("home_score") is None
+            or m.get("away_score") is None
+        ]
+
+    summary[
+        "still_pending_after"
+    ] = still_pending
 
     result["results"] = summary
 
@@ -141,7 +457,10 @@ def main():
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Actually import the next gameweek and/or save real results.",
+        help=(
+            "Actually import the next gameweek "
+            "and/or save real results."
+        ),
     )
 
     args = parser.parse_args()
@@ -152,11 +471,13 @@ def main():
         "started_at": datetime.now(
             timezone.utc
         ).isoformat(),
+
         "mode": (
             "PREVIEW"
             if dry
             else "EXECUTE"
         ),
+
         "status": "FAILED",
     }
 
@@ -166,11 +487,21 @@ def main():
     try:
         config = load_config()
 
+        result[
+            "backup_results_provider"
+        ] = "sportmonks"
+
+        result[
+            "backup_results_enabled"
+        ] = config.sportmonks_enabled
+
         with Site(config) as site:
 
             site.login()
 
-            status = site.api("status")
+            status = site.api(
+                "status"
+            )
 
             latest = status.get(
                 "latest_gameweek"
@@ -180,39 +511,84 @@ def main():
                 "website_latest_gameweek"
             ] = latest
 
-            gameweek_complete = check_and_apply_results(
-                site,
-                config,
-                latest,
-                dry,
-                result,
+            gameweek_complete = (
+                check_and_apply_results(
+                    site,
+                    config,
+                    latest,
+                    dry,
+                    result,
+                )
             )
 
             if not gameweek_complete:
 
+                results_data = result.get(
+                    "results",
+                    {},
+                )
+
                 results_found = (
-                    result["results"].get("updated")
-                    or result["results"].get("would_update")
+                    results_data.get(
+                        "updated"
+                    )
+                    or results_data.get(
+                        "would_update"
+                    )
                     or []
                 )
+
+                discrepancies = (
+                    results_data.get(
+                        "discrepancies"
+                    )
+                    or []
+                )
+
+                waiting_count = len(
+                    results_data.get(
+                        "waiting"
+                    )
+                    or []
+                )
+
+                if discrepancies:
+                    message = (
+                        f"GW{latest} has result "
+                        "discrepancies. "
+                        f"{len(discrepancies)} "
+                        "match(es) were blocked "
+                        "for safety. "
+                        "Next gameweek was not added."
+                    )
+
+                else:
+                    message = (
+                        f"GW{latest} still has "
+                        "unfinished matches. "
+                        f"{len(results_found)} "
+                        "result(s) "
+                        + (
+                            "updated."
+                            if not dry
+                            else "would be updated."
+                        )
+                        + f" {waiting_count} "
+                        "match(es) are still waiting. "
+                        "Next gameweek was not added."
+                    )
 
                 result.update(
                     {
                         "status": (
                             "SUCCESS - RESULTS ONLY"
                             if not dry
-                            else "SUCCESS - PREVIEW (RESULTS ONLY)"
+                            else
+                            "SUCCESS - PREVIEW "
+                            "(RESULTS ONLY)"
                         ),
-                        "message": (
-                            f"GW{latest} still has unfinished matches. "
-                            f"{len(results_found)} result(s) "
-                            + (
-                                "updated."
-                                if not dry
-                                else "would be updated."
-                            )
-                            + " Next gameweek was not added."
-                        ),
+
+                        "message": message,
                     }
                 )
 
@@ -222,6 +598,10 @@ def main():
                 )
 
                 return 0
+
+            # -------------------------------
+            # Current gameweek is complete
+            # -------------------------------
 
             target = (
                 int(latest) + 1
@@ -257,6 +637,10 @@ def main():
 
                 return 0
 
+        # -------------------------------
+        # FPL fixture import
+        # -------------------------------
+
         fpl = FPLClient()
 
         bootstrap = fpl.bootstrap()
@@ -266,7 +650,9 @@ def main():
             for team in bootstrap["teams"]
         }
 
-        raw = fpl.fixtures(target)
+        raw = fpl.fixtures(
+            target
+        )
 
         result[
             "fpl_fixtures_retrieved"
@@ -288,7 +674,9 @@ def main():
             "validated_fixtures"
         ] = len(fixtures)
 
-        sql = generate(fixtures)
+        sql = generate(
+            fixtures
+        )
 
         sql_path = save(
             sql,
@@ -303,7 +691,9 @@ def main():
 
             result.update(
                 {
-                    "status": "SUCCESS - PREVIEW",
+                    "status":
+                        "SUCCESS - PREVIEW",
+
                     "message": (
                         "Preview only. "
                         "Website was not modified."
@@ -317,6 +707,10 @@ def main():
             )
 
             return 0
+
+        # -------------------------------
+        # Import next gameweek
+        # -------------------------------
 
         with Site(config) as site:
 
@@ -334,9 +728,11 @@ def main():
                     "Import cancelled."
                 )
 
-            import_response = site.import_sql(
-                target,
-                sql,
+            import_response = (
+                site.import_sql(
+                    target,
+                    sql,
+                )
             )
 
             result[
@@ -356,18 +752,22 @@ def main():
                 "verified"
             ):
                 raise RuntimeError(
-                    "Post-import verification failed."
+                    "Post-import verification "
+                    "failed."
                 )
 
         result.update(
             {
-                "status": (
-                    "SUCCESS - VERIFIED"
-                ),
+                "status":
+                    "SUCCESS - VERIFIED",
+
                 "message": (
                     f"GW{target} imported "
                     "and verified successfully."
                 ),
+
+                "next_gameweek_added":
+                    target,
             }
         )
 
@@ -386,11 +786,15 @@ def main():
 
         finish(
             result,
-            target if target is not None else latest,
+            target
+            if target is not None
+            else latest,
         )
 
         return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        main()
+    )
