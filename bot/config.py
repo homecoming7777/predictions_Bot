@@ -34,6 +34,7 @@ class Config:
     admin_login_path: str
     admin_page_path: str
     bot_api_path: str
+    login_url:str
 
     bot_api_token: str
 
@@ -86,7 +87,7 @@ def load_config() -> Config:
 
         admin_page_path=(
             os.getenv("ADMIN_PAGE_PATH")
-            or "/admin.php"
+            or "/myAdmin.php"
         ),
 
         bot_api_path=required["BOT_API_PATH"],
