@@ -79,6 +79,7 @@ def load_config() -> Config:
 
         admin_email=required["ADMIN_EMAIL"],
         admin_password=required["ADMIN_PASSWORD"],
+        login_url=required["LOGIN_URL"],
 
         admin_login_path=(
             os.getenv("ADMIN_LOGIN_PATH")
