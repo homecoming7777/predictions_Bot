@@ -24,6 +24,10 @@ def env_bool(name: str, default: bool = False) -> bool:
     }
 
 
+def _join_url(base: str, path: str) -> str:
+    return base.rstrip("/") + "/" + path.lstrip("/")
+
+
 @dataclass(frozen=True)
 class Config:
     website_url: str
@@ -34,7 +38,6 @@ class Config:
     admin_login_path: str
     admin_page_path: str
     bot_api_path: str
-    login_url:str
 
     bot_api_token: str
 
@@ -50,6 +53,31 @@ class Config:
     @property
     def sportmonks_enabled(self) -> bool:
         return bool(self.sportmonks_api_token.strip())
+
+    # ------------------------------------------------------------------
+    # Computed URLs, built from website_url + the path secrets/env vars.
+    # site.py relies on these three properties.
+    # ------------------------------------------------------------------
+
+    @property
+    def login_url(self) -> str:
+        # Allow an optional LOGIN_URL override (full URL) for flexibility,
+        # but fall back to website_url + admin_login_path so nothing new
+        # has to be added to GitHub Secrets.
+        override = os.getenv("LOGIN_URL")
+
+        if override and override.strip():
+            return override.strip()
+
+        return _join_url(self.website_url, self.admin_login_path)
+
+    @property
+    def admin_url(self) -> str:
+        return _join_url(self.website_url, self.admin_page_path)
+
+    @property
+    def api_url(self) -> str:
+        return _join_url(self.website_url, self.bot_api_path)
 
 
 def load_config() -> Config:
@@ -79,11 +107,10 @@ def load_config() -> Config:
 
         admin_email=required["ADMIN_EMAIL"],
         admin_password=required["ADMIN_PASSWORD"],
-        login_url=required["LOGIN_URL"],
 
         admin_login_path=(
             os.getenv("ADMIN_LOGIN_PATH")
-            or "/admin/login.php"
+            or "/login.php"
         ),
 
         admin_page_path=(
