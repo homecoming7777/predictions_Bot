@@ -9,18 +9,6 @@ from playwright.sync_api import sync_playwright
 
 
 class Site:
-    """
-    Browser client for the PHP website.
-
-    It handles two different InfinityFree/browser situations:
-
-    1. InfinityFree's JavaScript __test challenge.
-    2. Chrome Safe Browsing's "Dangerous site" interstitial.
-
-    The second case is intentionally opt-in through ALLOW_UNSAFE_SITE=true.
-    It is a workaround for testing/automation of a site you control; it is
-    NOT a replacement for fixing the site's Safe Browsing reputation.
-    """
 
     def __init__(self, c):
         self.c = c
@@ -60,10 +48,6 @@ class Site:
             if self.pw:
                 self.pw.stop()
 
-    # ---------------------------------------------------------
-    # Browser/interstitial helpers
-    # ---------------------------------------------------------
-
     def _body_text(self) -> str:
         try:
             return self.page.locator("body").inner_text(timeout=3000).strip()
@@ -75,13 +59,6 @@ class Site:
         return "this site requires javascript" in text
 
     def _is_security_warning(self) -> bool:
-        """
-        Detect Chrome's Safe Browsing interstitial.
-
-        Chrome normally exposes it as chrome-error://chromewebdata/.
-        We also inspect the visible text because the exact internal URL can
-        differ between Chromium versions.
-        """
         url = (self.page.url or "").lower()
         text = self._body_text().lower()
 
@@ -103,15 +80,6 @@ class Site:
             return False
 
     def _handle_security_warning(self) -> bool:
-        """
-        Click:
-
-            Details
-            -> this unsafe site
-
-        Chrome's interstitial normally uses #details-button and #proceed-link.
-        Text selectors are kept as fallbacks for Chromium changes.
-        """
         if not self._is_security_warning():
             return False
 
@@ -123,7 +91,6 @@ class Site:
                 "Safe Browsing warning from the website itself."
             )
 
-        # Step 1: Details
         details_selectors = (
             "#details-button",
             "button:has-text('Details')",
@@ -145,7 +112,6 @@ class Site:
 
         self.page.wait_for_timeout(500)
 
-        # Step 2: this unsafe site
         proceed_selectors = (
             "#proceed-link",
             "a:has-text('this unsafe site')",
@@ -165,7 +131,6 @@ class Site:
                 "HEADLESS=false once to inspect the interstitial."
             )
 
-        # Give Chrome time to leave chrome-error:// and load the real page.
         try:
             self.page.wait_for_load_state(
                 "domcontentloaded",
@@ -185,15 +150,10 @@ class Site:
         return True
 
     def _wait_for_infinityfree(self, timeout=30000):
-        """
-        InfinityFree may initially return an AES JavaScript challenge.
-        Chromium executes it and receives the __test cookie.
-        """
 
         deadline = time.monotonic() + (timeout / 1000)
 
         while time.monotonic() < deadline:
-            # A Safe Browsing page is not the InfinityFree challenge.
             if self._is_security_warning():
                 self._handle_security_warning()
                 continue
@@ -210,34 +170,24 @@ class Site:
 
             self.page.wait_for_timeout(250)
 
-        # Last attempt: give the page a little extra time.
         self.page.wait_for_timeout(2000)
 
         if self._is_security_warning():
             self._handle_security_warning()
 
     def _goto(self, url, timeout=60000):
-        """
-        Navigate to a real website URL and transparently handle:
-        - Chrome Safe Browsing interstitial
-        - InfinityFree JavaScript challenge
-        """
         response = self.page.goto(
             url,
             wait_until="domcontentloaded",
             timeout=timeout,
         )
 
-        # The Safe Browsing interstitial can appear immediately after goto().
         if self._is_security_warning():
             self._handle_security_warning()
 
         self.page.wait_for_timeout(1000)
         self._wait_for_infinityfree(timeout=30000)
 
-        # InfinityFree's challenge can redirect back to the requested URL.
-        # If the challenge HTML is still visible, reload the original URL now
-        # that __test should exist.
         if self._is_infinityfree_challenge():
             self.page.wait_for_timeout(1500)
             self.page.goto(
@@ -252,15 +202,7 @@ class Site:
 
         return response
 
-    # ---------------------------------------------------------
-    # Website operations
-    # ---------------------------------------------------------
-
     def login(self):
-        """
-        Login is retained for compatibility with the existing bot.
-        The API itself is authenticated by BOT_API_TOKEN.
-        """
 
         self._goto(self.c.login_url)
 
@@ -292,15 +234,10 @@ class Site:
         return True
 
     def open_admin(self):
-        """Open myAdmin.php using the same security-warning handling."""
         self._goto(self.c.admin_url)
         return self.page.url
 
     def api(self, action, gw=None):
-        """
-        Call bot_api.php through the same Playwright browser context that
-        passed the website's browser checks.
-        """
 
         params = {
             "action": action,
@@ -319,8 +256,6 @@ class Site:
         if not body:
             raise RuntimeError("Website API returned an empty response.")
 
-        # A challenge/warning that appeared after navigation should be
-        # handled before trying JSON parsing.
         if self._is_security_warning():
             self._handle_security_warning()
             body = self._body_text()
@@ -351,12 +286,6 @@ class Site:
         return data
 
     def import_sql(self, gw, sql):
-        """
-        Import through bot_api.php using the existing browser context.
-
-        The browser context already owns the InfinityFree __test cookie, so
-        the request can be sent as POST without rendering the API response.
-        """
 
         params = {
             "action": "import",
@@ -379,8 +308,6 @@ class Site:
 
         text = response.text().strip()
 
-        # If the server still returned the InfinityFree challenge, the
-        # browser must visit the URL once to execute it and obtain __test.
         if "This site requires Javascript" in text:
             self._goto(url)
             response = self.context.request.post(
@@ -404,3 +331,45 @@ class Site:
             )
 
         return data
+
+    def save_result(self, match_id, current_gw, home_score, away_score):
+
+        url = self.c.admin_url
+
+        form = {
+            "save_result": "1",
+            "match_id": str(match_id),
+            "current_gw": str(current_gw),
+            "home_score": str(home_score),
+            "away_score": str(away_score),
+        }
+
+        response = self.context.request.post(
+            url,
+            form=form,
+            timeout=60000,
+        )
+
+        if not response.ok:
+            raise RuntimeError(
+                f"Website save_result HTTP error: {response.status}"
+            )
+
+        text = response.text()
+
+        if "This site requires Javascript" in text:
+            self._goto(url)
+            response = self.context.request.post(
+                url,
+                form=form,
+                timeout=60000,
+            )
+            text = response.text()
+
+        if "login.php" in (response.url or "").lower():
+            raise RuntimeError(
+                "Website save_result was redirected to the login page. "
+                "The admin session may have expired."
+            )
+
+        return text

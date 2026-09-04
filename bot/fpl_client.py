@@ -7,3 +7,8 @@ class FPLClient:
         r=self.s.get(BASE+path,timeout=30); r.raise_for_status(); return r.json()
     def bootstrap(self): return self.get('/bootstrap-static/')
     def fixtures(self,gw): return self.get(f'/fixtures/?event={gw}')
+
+
+def team_names(bootstrap):
+    """FPL team id -> team name map, built from a bootstrap() response."""
+    return {int(team['id']): team['name'] for team in bootstrap['teams']}
