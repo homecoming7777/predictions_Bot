@@ -84,9 +84,69 @@ def build_fpl_results_index(raw_fixtures, teams):
     return index
 
 
+# FPL's API often uses a short nickname for a club ("Man City", "Spurs",
+# "Nott'm Forest", "Newcastle", "Leeds", "Hull", "Man Utd", "Wolves",
+# "West Ham", "Leicester", "Ipswich", "Coventry", "Norwich",
+# "Sheffield Utd") while a site's matches table may have been seeded
+# with the full club name ("Manchester City", "Tottenham Hotspur",
+# "Nottingham Forest", "Newcastle United", "Leeds United", "Hull City",
+# "Manchester United", "Wolverhampton Wanderers", "West Ham United",
+# "Leicester City", "Ipswich Town", "Coventry City", "Norwich City",
+# "Sheffield United"). If those two spellings aren't collapsed to the
+# same key, a fixture involving any of these clubs can never be
+# matched between FPL's data and the site's data - it will report
+# "waiting" forever, even long after the real match has finished.
+# Every known variant below maps to the same canonical string
+# regardless of which spelling FPL or the site happens to use.
+_TEAM_ALIASES = {
+    "man city": "manchester city",
+    "manchester city": "manchester city",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "manchester united": "manchester united",
+    "spurs": "tottenham hotspur",
+    "tottenham": "tottenham hotspur",
+    "tottenham hotspur": "tottenham hotspur",
+    "nott'm forest": "nottingham forest",
+    "nottm forest": "nottingham forest",
+    "forest": "nottingham forest",
+    "nottingham forest": "nottingham forest",
+    "newcastle": "newcastle united",
+    "newcastle united": "newcastle united",
+    "leeds": "leeds united",
+    "leeds united": "leeds united",
+    "hull": "hull city",
+    "hull city": "hull city",
+    "wolves": "wolverhampton wanderers",
+    "wolverhampton": "wolverhampton wanderers",
+    "wolverhampton wanderers": "wolverhampton wanderers",
+    "west ham": "west ham united",
+    "west ham united": "west ham united",
+    "leicester": "leicester city",
+    "leicester city": "leicester city",
+    "ipswich": "ipswich town",
+    "ipswich town": "ipswich town",
+    "coventry": "coventry city",
+    "coventry city": "coventry city",
+    "norwich": "norwich city",
+    "norwich city": "norwich city",
+    "sheffield utd": "sheffield united",
+    "sheffield united": "sheffield united",
+    "brighton": "brighton and hove albion",
+    "brighton & hove albion": "brighton and hove albion",
+    "brighton and hove albion": "brighton and hove albion",
+    "bournemouth": "bournemouth",
+    "afc bournemouth": "bournemouth",
+}
+
+
 def normalize_team(value):
     """
-    Basic normalization for FPL team names.
+    Normalization for FPL/site team names.
+
+    Collapses whitespace/case, then maps known club-name variants
+    (short nickname vs full name) to one shared canonical form - see
+    _TEAM_ALIASES above for why this is necessary.
 
     Sportmonks has its own stronger normalization in backup_results.py,
     but keeping this function here makes results.py independent and easy
@@ -96,12 +156,14 @@ def normalize_team(value):
     if value is None:
         return ""
 
-    return " ".join(
+    cleaned = " ".join(
         str(value)
         .casefold()
         .strip()
         .split()
     )
+
+    return _TEAM_ALIASES.get(cleaned, cleaned)
 
 
 def safe_int(value):
