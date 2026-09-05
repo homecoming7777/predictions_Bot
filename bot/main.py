@@ -224,8 +224,8 @@ def check_and_apply_results(
     matches = [
         m
         for m in all_matches
-        if (m.get("competition") or "").strip()
-        == "Premier League"
+        if (m.get("competition") or "").strip().casefold()
+        == "premier league"
     ]
 
     summary["other_competition_rows_ignored"] = (
@@ -258,9 +258,16 @@ def check_and_apply_results(
         fpl.bootstrap()
     )
 
-    raw = fpl.fixtures(
-        latest
-    )
+    # NOTE: this intentionally fetches the WHOLE season's fixtures, not
+    # just `latest`. FPL sometimes reschedules a match to a different
+    # gameweek than it was originally set for (TV picks, European
+    # fixtures, postponements). If we only asked for event=latest, a
+    # rescheduled match would never show up here and would stay stuck
+    # on "waiting" forever, even after it finished - which is exactly
+    # the "already finished but bot says waiting" bug. Matching by
+    # (home_team, away_team) is still safe across the whole season
+    # because each ordered pair only plays once a season.
+    raw = fpl.fixtures_all()
 
     fpl_index = (
         results_mod.build_fpl_results_index(

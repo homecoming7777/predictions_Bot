@@ -7,6 +7,7 @@ class FPLClient:
         r=self.s.get(BASE+path,timeout=30); r.raise_for_status(); return r.json()
     def bootstrap(self): return self.get('/bootstrap-static/')
     def fixtures(self,gw): return self.get(f'/fixtures/?event={gw}')
+    def fixtures_all(self): return self.get('/fixtures/')
 
 
 def team_names(bootstrap):
