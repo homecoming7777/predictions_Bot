@@ -207,9 +207,29 @@ def check_and_apply_results(
         latest,
     )
 
-    matches = matches_resp.get(
+    all_matches = matches_resp.get(
         "matches",
         [],
+    )
+
+    # IMPORTANT: `matches` (gameweek numbers) are shared across
+    # competitions on the site (Premier League + Other Leagues can use
+    # the same gameweek number). This bot's only real result source is
+    # the FPL API, which only ever knows about Premier League fixtures.
+    # If Other-Leagues rows for this gameweek were left in here, they
+    # would never resolve and would block the gameweek forever - which
+    # is exactly the "finished match still shows waiting" bug. So this
+    # pipeline only ever looks at, and only ever blocks on, Premier
+    # League rows. Other Leagues results are simply out of scope here.
+    matches = [
+        m
+        for m in all_matches
+        if (m.get("competition") or "").strip()
+        == "Premier League"
+    ]
+
+    summary["other_competition_rows_ignored"] = (
+        len(all_matches) - len(matches)
     )
 
     pending = results_mod.pending_matches(
@@ -430,10 +450,15 @@ def check_and_apply_results(
             latest,
         )
 
-        final_matches = final_resp.get(
-            "matches",
-            [],
-        )
+        final_matches = [
+            m
+            for m in final_resp.get(
+                "matches",
+                [],
+            )
+            if (m.get("competition") or "").strip()
+            == "Premier League"
+        ]
 
         still_pending = [
             m["id"]
