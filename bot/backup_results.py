@@ -1,18 +1,3 @@
-"""
-Sportmonks backup result provider.
-
-This module is deliberately independent from the browser/site code.
-
-The bot uses FPL as the primary source and Sportmonks as a second source
-when available.
-
-Important:
-- We never trust a Sportmonks result merely because a score exists.
-- A fixture must be in a final/full-time state.
-- Team names are normalized before matching.
-- Multiple possible matches are treated as ambiguous rather than guessed.
-"""
-
 from datetime import datetime
 import re
 import unicodedata
@@ -23,7 +8,6 @@ import requests
 BASE_URL = "https://api.sportmonks.com/v3/football"
 
 
-# Common Premier League naming differences between providers.
 TEAM_ALIASES = {
     "manchester united": "manchester united",
     "man utd": "manchester united",
@@ -79,9 +63,6 @@ TEAM_ALIASES = {
 
 
 def normalize_team_name(value):
-    """
-    Normalize a team name so different providers can be compared safely.
-    """
 
     if value is None:
         return ""
@@ -154,7 +135,6 @@ def extract_participants(fixture):
         elif location == "away":
             away = name
 
-    # Some responses may not have meta.location.
     if home is None or away is None:
         names = [
             p.get("name")
@@ -171,12 +151,6 @@ def extract_participants(fixture):
 
 
 def extract_score(fixture):
-    """
-    Extract the CURRENT/FINAL score from Sportmonks scores[].
-
-    We prefer the FT score where available.
-    """
-
     scores = fixture.get("scores")
 
     if not isinstance(scores, list):
@@ -204,8 +178,6 @@ def extract_score(fixture):
             or ""
         ).lower()
 
-        # Sportmonks score entries commonly expose
-        # goals plus participant. We need both sides.
         if description in {
             "CURRENT",
             "CURRENT SCORE",
@@ -219,7 +191,6 @@ def extract_score(fixture):
         }:
             full_time = score
 
-    # Build score from participant-specific entries.
     selected = full_time or current
 
     if selected is None:
@@ -262,8 +233,6 @@ def extract_score(fixture):
     if home_score is not None and away_score is not None:
         return home_score, away_score
 
-    # More defensive fallback:
-    # collect participant-specific score records.
     home_score = None
     away_score = None
 
@@ -312,15 +281,6 @@ def extract_score(fixture):
 
 
 def is_final_fixture(fixture):
-    """
-    Determine whether Sportmonks considers a fixture final.
-
-    Sportmonks uses state information for fixture state. State 5 is the
-    standard Full Time state. We also accept explicit result_info text
-    indicating a full-time result.
-
-    We intentionally do NOT accept a live/current score as final.
-    """
 
     state_id = fixture.get("state_id")
 
@@ -393,12 +353,6 @@ class SportmonksClient:
         return payload
 
     def fixtures_by_date(self, date_value):
-        """
-        Retrieve Sportmonks fixtures for one calendar date.
-
-        We request participants, scores, state and league so the result
-        matching is based on actual structured data.
-        """
 
         return self.get(
             f"/fixtures/date/{date_value}",
@@ -461,14 +415,7 @@ def find_final_result_for_match(
     client,
     match,
 ):
-    """
-    Search Sportmonks by the site's match date and then match teams.
 
-    Returns:
-        result dict
-        None
-        or an error/ambiguous status dict.
-    """
 
     date_value = _date_from_match(match)
 
@@ -525,8 +472,6 @@ def find_final_result_for_match(
     if not candidates:
         return None
 
-    # If there is more than one same-team fixture on that date,
-    # match by kickoff time where possible.
     if len(candidates) > 1:
         target_date = str(
             match.get("match_date")

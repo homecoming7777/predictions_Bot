@@ -47,23 +47,17 @@ class Config:
     import_confirm: bool
     allow_unsafe_site: bool
 
-    # Backup result provider
     sportmonks_api_token: str
 
     @property
     def sportmonks_enabled(self) -> bool:
         return bool(self.sportmonks_api_token.strip())
 
-    # ------------------------------------------------------------------
-    # Computed URLs, built from website_url + the path secrets/env vars.
-    # site.py relies on these three properties.
-    # ------------------------------------------------------------------
+
 
     @property
     def login_url(self) -> str:
-        # Allow an optional LOGIN_URL override (full URL) for flexibility,
-        # but fall back to website_url + admin_login_path so nothing new
-        # has to be added to GitHub Secrets.
+       
         override = os.getenv("LOGIN_URL")
 
         if override and override.strip():

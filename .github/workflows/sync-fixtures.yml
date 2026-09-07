@@ -1,10 +1,6 @@
 name: FPL Fixture Sync
 
 on:
-  # Runs by itself - checks the site every 15 minutes and applies
-  # whatever results/fixtures are due, with no one needing to click
-  # "Run workflow". Manual runs (below) still work exactly as before,
-  # e.g. to preview before trusting the automation, or to force a run.
   schedule:
     - cron: "*/15 * * * *"
 
@@ -22,9 +18,6 @@ on:
 permissions:
   contents: read
 
-# Prevents two runs from overlapping if a run ever takes longer than
-# 15 minutes (Playwright + several site round trips) - the next
-# scheduled run waits instead of racing the one still in progress.
 concurrency:
   group: fpl-fixture-sync
   cancel-in-progress: false
@@ -70,12 +63,9 @@ jobs:
 
           HEADLESS: "true"
 
-          # Keep the existing dangerous-site protection behavior.
+          
           ALLOW_UNSAFE_SITE: "true"
 
-          # A scheduled run has no human to answer a "mode" prompt, so
-          # it always executes for real. A manual run still respects
-          # whatever you pick in the "Run workflow" dropdown.
           IMPORT_CONFIRM: ${{ (github.event_name == 'schedule' || inputs.mode == 'execute') && 'true' || 'false' }}
 
         run: |
