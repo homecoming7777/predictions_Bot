@@ -51,6 +51,9 @@ jobs:
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
 
+          WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
+          WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+
           ADMIN_LOGIN_PATH: ${{ secrets.ADMIN_LOGIN_PATH }}
           ADMIN_PAGE_PATH: ${{ secrets.ADMIN_PAGE_PATH }}
 
