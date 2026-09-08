@@ -13,6 +13,7 @@ from .backup_results import (
     SportmonksClient,
     find_final_result_for_match,
 )
+from .notify import send_whatsapp_report
 
 
 def save_report(result, gameweek=None):
@@ -44,7 +45,7 @@ def save_report(result, gameweek=None):
     return path
 
 
-def finish(result, gameweek=None):
+def finish(result, gameweek=None, config=None):
     report_path = save_report(
         result,
         gameweek,
@@ -53,6 +54,9 @@ def finish(result, gameweek=None):
     result["report_file"] = str(
         report_path
     )
+
+    if config is not None:
+        send_whatsapp_report(config, result)
 
     report_path.write_text(
         json.dumps(
@@ -77,7 +81,9 @@ def fetch_backup_results(
     summary,
 ):
     """
-    Query Sportmonks for every pending site match.
+    Query Sportmonks for every pending site match - Premier League and
+    Other Leagues alike. Sportmonks matches purely by team name + date,
+    so it doesn't care which competition a match belongs to.
 
     A failed backup API request does NOT automatically fail the entire bot.
     The match simply remains pending unless FPL already has a safe result.
@@ -182,6 +188,13 @@ def fetch_backup_results(
     return backup_results
 
 
+def _is_premier_league(match):
+    return (
+        (match.get("competition") or "").strip().casefold()
+        == "premier league"
+    )
+
+
 def check_and_apply_results(
     site,
     config,
@@ -212,33 +225,34 @@ def check_and_apply_results(
         [],
     )
 
-    # IMPORTANT: `matches` (gameweek numbers) are shared across
-    # competitions on the site (Premier League + Other Leagues can use
-    # the same gameweek number). This bot's only real result source is
-    # the FPL API, which only ever knows about Premier League fixtures.
-    # If Other-Leagues rows for this gameweek were left in here, they
-    # would never resolve and would block the gameweek forever - which
-    # is exactly the "finished match still shows waiting" bug. So this
-    # pipeline only ever looks at, and only ever blocks on, Premier
-    # League rows. Other Leagues results are simply out of scope here.
-    matches = [
-        m
-        for m in all_matches
-        if (m.get("competition") or "").strip().casefold()
-        == "premier league"
+    # `matches` (gameweek numbers) are shared across competitions on
+    # the site (Premier League + Other Leagues can use the same
+    # gameweek number). FPL only ever knows about Premier League
+    # fixtures, so it can only ever resolve Premier League rows.
+    # Other Leagues rows are resolved through the Sportmonks backup
+    # provider instead (see fetch_backup_results / results.compare_results),
+    # which matches purely by team name + date and does not care which
+    # competition a match belongs to. The gameweek is only considered
+    # "complete" - and the next Premier League gameweek only gets
+    # imported - once EVERY match this gameweek, across every
+    # competition, has a safe final result.
+    pl_matches = [
+        m for m in all_matches if _is_premier_league(m)
     ]
 
-    summary["other_competition_rows_ignored"] = (
-        len(all_matches) - len(matches)
-    )
+    other_matches = [
+        m for m in all_matches if not _is_premier_league(m)
+    ]
 
-    pending = results_mod.pending_matches(
-        matches
-    )
+    pending_pl = results_mod.pending_matches(pl_matches)
+    pending_other = results_mod.pending_matches(other_matches)
+    pending = pending_pl + pending_other
 
-    summary["pending_before"] = len(
-        pending
-    )
+    summary["premier_league_matches_this_gameweek"] = len(pl_matches)
+    summary["other_league_matches_this_gameweek"] = len(other_matches)
+    summary["pending_before"] = len(pending)
+    summary["pending_before_premier_league"] = len(pending_pl)
+    summary["pending_before_other_leagues"] = len(pending_other)
 
     # If there is nothing to reconcile, the gameweek is complete.
     if not pending:
@@ -249,35 +263,41 @@ def check_and_apply_results(
         return True
 
     # -------------------------------
-    # Primary source: FPL
+    # Primary source for Premier League matches: FPL.
+    # Other Leagues matches get fpl_result=None below and can only
+    # ever be resolved by the Sportmonks backup.
     # -------------------------------
 
-    fpl = FPLClient()
+    fpl_index = {}
 
-    teams = team_names(
-        fpl.bootstrap()
-    )
+    if pending_pl:
+        fpl = FPLClient()
 
-    # NOTE: this intentionally fetches the WHOLE season's fixtures, not
-    # just `latest`. FPL sometimes reschedules a match to a different
-    # gameweek than it was originally set for (TV picks, European
-    # fixtures, postponements). If we only asked for event=latest, a
-    # rescheduled match would never show up here and would stay stuck
-    # on "waiting" forever, even after it finished - which is exactly
-    # the "already finished but bot says waiting" bug. Matching by
-    # (home_team, away_team) is still safe across the whole season
-    # because each ordered pair only plays once a season.
-    raw = fpl.fixtures_all()
-
-    fpl_index = (
-        results_mod.build_fpl_results_index(
-            raw,
-            teams,
+        teams = team_names(
+            fpl.bootstrap()
         )
-    )
+
+        # NOTE: this intentionally fetches the WHOLE season's fixtures, not
+        # just `latest`. FPL sometimes reschedules a match to a different
+        # gameweek than it was originally set for (TV picks, European
+        # fixtures, postponements). If we only asked for event=latest, a
+        # rescheduled match would never show up here and would stay stuck
+        # on "waiting" forever, even after it finished - which is exactly
+        # the "already finished but bot says waiting" bug. Matching by
+        # (home_team, away_team) is still safe across the whole season
+        # because each ordered pair only plays once a season.
+        raw = fpl.fixtures_all()
+
+        fpl_index = (
+            results_mod.build_fpl_results_index(
+                raw,
+                teams,
+            )
+        )
 
     # -------------------------------
-    # Backup source: Sportmonks
+    # Backup source for EVERYONE (Premier League + Other Leagues):
+    # Sportmonks
     # -------------------------------
 
     backup_results = fetch_backup_results(
@@ -290,6 +310,8 @@ def check_and_apply_results(
     # Compare providers
     # -------------------------------
 
+    pending_pl_ids = {m["id"] for m in pending_pl}
+
     decisions = []
 
     for match in pending:
@@ -299,6 +321,8 @@ def check_and_apply_results(
                 match,
                 fpl_index,
             )
+            if match["id"] in pending_pl_ids
+            else None
         )
 
         backup_result = (
@@ -435,7 +459,10 @@ def check_and_apply_results(
         summary["updated"] = applied
 
     # -------------------------------
-    # Re-check the website AFTER updates
+    # Re-check the website AFTER updates - across EVERY competition,
+    # not just Premier League, since the gameweek (and therefore the
+    # next Premier League gameweek import) is only "complete" once
+    # every match this gameweek has a result.
     # -------------------------------
 
     if dry:
@@ -457,15 +484,10 @@ def check_and_apply_results(
             latest,
         )
 
-        final_matches = [
-            m
-            for m in final_resp.get(
-                "matches",
-                [],
-            )
-            if (m.get("competition") or "").strip()
-            == "Premier League"
-        ]
+        final_matches = final_resp.get(
+            "matches",
+            [],
+        )
 
         still_pending = [
             m["id"]
@@ -515,6 +537,7 @@ def main():
 
     target = None
     latest = None
+    config = None
 
     try:
         config = load_config()
@@ -627,6 +650,7 @@ def main():
                 finish(
                     result,
                     latest,
+                    config,
                 )
 
                 return 0
@@ -665,6 +689,7 @@ def main():
                 finish(
                     result,
                     target,
+                    config,
                 )
 
                 return 0
@@ -736,6 +761,7 @@ def main():
             finish(
                 result,
                 target,
+                config,
             )
 
             return 0
@@ -806,6 +832,7 @@ def main():
         finish(
             result,
             target,
+            config,
         )
 
         return 0
@@ -821,6 +848,7 @@ def main():
             target
             if target is not None
             else latest,
+            config,
         )
 
         return 1

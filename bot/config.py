@@ -49,10 +49,12 @@ class Config:
 
     sportmonks_api_token: str
 
+    whatsapp_phone: str
+    whatsapp_apikey: str
+
     @property
     def sportmonks_enabled(self) -> bool:
         return bool(self.sportmonks_api_token.strip())
-
 
 
     @property
@@ -133,8 +135,18 @@ def load_config() -> Config:
             False,
         ),
 
-        sportmonks_api_token=(
+                sportmonks_api_token=(
             os.getenv("SPORTMONKS_API_TOKEN")
+            or ""
+        ).strip(),
+
+        whatsapp_phone=(
+            os.getenv("WHATSAPP_PHONE")
+            or ""
+        ).strip(),
+
+        whatsapp_apikey=(
+            os.getenv("WHATSAPP_APIKEY")
             or ""
         ).strip(),
     )
