@@ -373,3 +373,29 @@ class Site:
             )
 
         return text
+
+    def screenshot_leaderboard(self, gameweek, config, out_path):
+        """
+        Navigate to the gameweek leaderboard page (uses the already
+        logged-in admin session) and screenshot the leaderboard table.
+
+        Falls back to a full-page screenshot if the configured
+        LEADERBOARD_TABLE_SELECTOR can't be found, so this optional
+        feature degrades gracefully instead of raising.
+        """
+
+        url = config.leaderboard_url(gameweek)
+
+        self._goto(url, timeout=60000)
+        self.page.wait_for_timeout(1500)
+
+        selector = config.leaderboard_table_selector
+
+        try:
+            locator = self.page.locator(selector).first
+            locator.wait_for(state="visible", timeout=15000)
+            locator.screenshot(path=str(out_path))
+        except Exception:
+            self.page.screenshot(path=str(out_path), full_page=True)
+
+        return out_path

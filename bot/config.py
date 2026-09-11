@@ -24,6 +24,18 @@ def env_bool(name: str, default: bool = False) -> bool:
     }
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        return default
+
+    try:
+        return float(value.strip())
+    except ValueError:
+        return default
+
+
 def _join_url(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
 
@@ -52,14 +64,34 @@ class Config:
     whatsapp_phone: str
     whatsapp_apikey: str
 
+    # ---- gap-gating (personal WhatsApp report) ----
+    whatsapp_gap_hours: float
+
+    # ---- gameweek leaderboard screenshot ----
+    leaderboard_page_path: str
+    leaderboard_gw_param: str
+    leaderboard_table_selector: str
+
+    # ---- WhatsApp GROUP screenshot delivery (Green API) ----
+    greenapi_id_instance: str
+    greenapi_api_token: str
+    whatsapp_group_id: str
+
     @property
     def sportmonks_enabled(self) -> bool:
         return bool(self.sportmonks_api_token.strip())
 
+    @property
+    def group_screenshot_enabled(self) -> bool:
+        return bool(
+            self.greenapi_id_instance.strip()
+            and self.greenapi_api_token.strip()
+            and self.whatsapp_group_id.strip()
+        )
 
     @property
     def login_url(self) -> str:
-       
+
         override = os.getenv("LOGIN_URL")
 
         if override and override.strip():
@@ -74,6 +106,10 @@ class Config:
     @property
     def api_url(self) -> str:
         return _join_url(self.website_url, self.bot_api_path)
+
+    def leaderboard_url(self, gameweek) -> str:
+        base = _join_url(self.website_url, self.leaderboard_page_path)
+        return f"{base}?{self.leaderboard_gw_param}={gameweek}"
 
 
 def load_config() -> Config:
@@ -135,7 +171,7 @@ def load_config() -> Config:
             False,
         ),
 
-                sportmonks_api_token=(
+        sportmonks_api_token=(
             os.getenv("SPORTMONKS_API_TOKEN")
             or ""
         ).strip(),
@@ -147,6 +183,41 @@ def load_config() -> Config:
 
         whatsapp_apikey=(
             os.getenv("WHATSAPP_APIKEY")
+            or ""
+        ).strip(),
+
+        whatsapp_gap_hours=env_float(
+            "WHATSAPP_GAP_HOURS",
+            24.0,
+        ),
+
+        leaderboard_page_path=(
+            os.getenv("LEADERBOARD_PAGE_PATH")
+            or "/leaderboard.php"
+        ).strip(),
+
+        leaderboard_gw_param=(
+            os.getenv("LEADERBOARD_GW_PARAM")
+            or "gameweek"
+        ).strip(),
+
+        leaderboard_table_selector=(
+            os.getenv("LEADERBOARD_TABLE_SELECTOR")
+            or "table"
+        ).strip(),
+
+        greenapi_id_instance=(
+            os.getenv("GREENAPI_ID_INSTANCE")
+            or ""
+        ).strip(),
+
+        greenapi_api_token=(
+            os.getenv("GREENAPI_API_TOKEN")
+            or ""
+        ).strip(),
+
+        whatsapp_group_id=(
+            os.getenv("WHATSAPP_GROUP_ID")
             or ""
         ).strip(),
     )

@@ -2,6 +2,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .config import load_config
 from .fpl_client import FPLClient, team_names
@@ -13,7 +14,10 @@ from .backup_results import (
     SportmonksClient,
     find_final_result_for_match,
 )
-from .notify import send_whatsapp_report
+from .notify import (
+    send_whatsapp_report,
+    send_whatsapp_group_screenshot,
+)
 
 
 def save_report(result, gameweek=None):
@@ -45,7 +49,117 @@ def save_report(result, gameweek=None):
     return path
 
 
-def finish(result, gameweek=None, config=None):
+def _parse_site_datetime(value, tz):
+    if not value:
+        return None
+    try:
+        naive = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+    return naive.replace(tzinfo=ZoneInfo(tz))
+
+
+def _min_max_match_date(matches, tz):
+    dates = [
+        _parse_site_datetime(m.get("match_date"), tz)
+        for m in matches
+    ]
+    dates = [d for d in dates if d is not None]
+    if not dates:
+        return None, None
+    return min(dates), max(dates)
+
+
+def compute_whatsapp_gap(site, config, latest, target, next_fixtures=None):
+    """
+    Gap (in hours) between the LAST match of the gameweek that just
+    ended (`latest`) and the FIRST match of the next gameweek
+    (`target`). Used to decide whether the personal WhatsApp report
+    should be suppressed while we're deep in the inter-gameweek gap.
+
+    Never raises - any failure here defaults to (None, True) so this
+    feature can never silently block a real notification.
+    """
+
+    try:
+        tz = config.site_timezone
+
+        current_resp = site.api("matches", latest)
+        current_matches = current_resp.get("matches", [])
+        _, last_dt = _min_max_match_date(current_matches, tz)
+
+        if next_fixtures:
+            first_dt = _parse_site_datetime(
+                next_fixtures[0]["match_date"], tz
+            )
+        else:
+            next_resp = site.api("matches", target)
+            next_matches = next_resp.get("matches", [])
+            first_dt, _ = _min_max_match_date(next_matches, tz)
+
+        if last_dt is None or first_dt is None:
+            return None, True
+
+        gap_hours = (first_dt - last_dt).total_seconds() / 3600.0
+
+        allow = gap_hours <= config.whatsapp_gap_hours
+
+        return gap_hours, allow
+
+    except Exception:
+        return None, True
+
+
+def maybe_send_group_leaderboard(site, config, latest, results_summary, result):
+    """
+    If the gameweek that was just checked went from "had pending
+    matches" to "fully complete" IN THIS RUN, screenshot the
+    leaderboard and send it to the WhatsApp group. Never raises -
+    failures are recorded on `result` and the bot keeps going.
+    """
+
+    pending_before = results_summary.get("pending_before", 0) or 0
+    still_pending_after = results_summary.get("still_pending_after", [])
+    discrepancies = results_summary.get("discrepancies", [])
+
+    just_completed = (
+        pending_before > 0
+        and not still_pending_after
+        and not discrepancies
+    )
+
+    if not just_completed:
+        return
+
+    if not config.group_screenshot_enabled:
+        result["group_screenshot_sent"] = False
+        result["group_screenshot_skipped_reason"] = (
+            "GREENAPI_ID_INSTANCE / GREENAPI_API_TOKEN / "
+            "WHATSAPP_GROUP_ID not configured"
+        )
+        return
+
+    try:
+        screenshots_dir = Path("reports")
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+        image_path = screenshots_dir / f"gameweek_{latest}_leaderboard.png"
+
+        site.screenshot_leaderboard(latest, config, image_path)
+
+        send_whatsapp_group_screenshot(
+            config,
+            latest,
+            image_path,
+            result,
+        )
+
+    except Exception as exc:
+        result["group_screenshot_sent"] = False
+        result["group_screenshot_error"] = f"{type(exc).__name__}: {exc}"
+
+
+def finish(result, gameweek=None, config=None, allow_personal_whatsapp=True):
     report_path = save_report(
         result,
         gameweek,
@@ -56,7 +170,11 @@ def finish(result, gameweek=None, config=None):
     )
 
     if config is not None:
-        send_whatsapp_report(config, result)
+        send_whatsapp_report(
+            config,
+            result,
+            allow=allow_personal_whatsapp,
+        )
 
     report_path.write_text(
         json.dumps(
@@ -576,6 +694,19 @@ def main():
                 )
             )
 
+            # Fire the WhatsApp GROUP leaderboard screenshot the moment
+            # this run is the one that finished off the gameweek (does
+            # nothing on every other run, and never touches the
+            # personal-report flow above).
+            if not dry:
+                maybe_send_group_leaderboard(
+                    site,
+                    config,
+                    latest,
+                    result.get("results", {}),
+                    result,
+                )
+
             if not gameweek_complete:
 
                 results_data = result.get(
@@ -686,10 +817,20 @@ def main():
                     }
                 )
 
+                gap_hours, allow_personal = compute_whatsapp_gap(
+                    site,
+                    config,
+                    latest,
+                    target,
+                )
+
+                result["whatsapp_gap_hours"] = gap_hours
+
                 finish(
                     result,
                     target,
                     config,
+                    allow_personal_whatsapp=allow_personal,
                 )
 
                 return 0
@@ -758,10 +899,29 @@ def main():
                 }
             )
 
+            allow_personal = True
+
+            try:
+                with Site(config) as gap_site:
+                    gap_site.login()
+
+                    gap_hours, allow_personal = compute_whatsapp_gap(
+                        gap_site,
+                        config,
+                        latest,
+                        target,
+                        next_fixtures=fixtures,
+                    )
+
+                    result["whatsapp_gap_hours"] = gap_hours
+            except Exception:
+                allow_personal = True
+
             finish(
                 result,
                 target,
                 config,
+                allow_personal_whatsapp=allow_personal,
             )
 
             return 0
@@ -814,6 +974,16 @@ def main():
                     "failed."
                 )
 
+            gap_hours, allow_personal = compute_whatsapp_gap(
+                site,
+                config,
+                latest,
+                target,
+                next_fixtures=fixtures,
+            )
+
+            result["whatsapp_gap_hours"] = gap_hours
+
         result.update(
             {
                 "status":
@@ -833,6 +1003,7 @@ def main():
             result,
             target,
             config,
+            allow_personal_whatsapp=allow_personal,
         )
 
         return 0

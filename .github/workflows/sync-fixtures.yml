@@ -53,6 +53,15 @@ jobs:
 
           WHATSAPP_PHONE: ${{ secrets.WHATSAPP_PHONE }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+          WHATSAPP_GAP_HOURS: ${{ secrets.WHATSAPP_GAP_HOURS }}
+
+          LEADERBOARD_PAGE_PATH: ${{ secrets.LEADERBOARD_PAGE_PATH }}
+          LEADERBOARD_GW_PARAM: ${{ secrets.LEADERBOARD_GW_PARAM }}
+          LEADERBOARD_TABLE_SELECTOR: ${{ secrets.LEADERBOARD_TABLE_SELECTOR }}
+
+          GREENAPI_ID_INSTANCE: ${{ secrets.GREENAPI_ID_INSTANCE }}
+          GREENAPI_API_TOKEN: ${{ secrets.GREENAPI_API_TOKEN }}
+          WHATSAPP_GROUP_ID: ${{ secrets.WHATSAPP_GROUP_ID }}
 
           ADMIN_LOGIN_PATH: ${{ secrets.ADMIN_LOGIN_PATH }}
           ADMIN_PAGE_PATH: ${{ secrets.ADMIN_PAGE_PATH }}
@@ -66,7 +75,6 @@ jobs:
 
           HEADLESS: "true"
 
-          
           ALLOW_UNSAFE_SITE: "true"
 
           IMPORT_CONFIRM: ${{ (github.event_name == 'schedule' || inputs.mode == 'execute') && 'true' || 'false' }}
