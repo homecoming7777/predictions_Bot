@@ -86,6 +86,12 @@ class Config:
     # ---- gap-gating (email report) ----
     report_gap_hours: float
 
+    # ---- activity / deadline monitor ----
+    monitor_enabled: bool
+    deadline_warning_hours: float
+    deadline_passed_max_age_hours: float
+    activity_period_days: int
+
     # ---- gameweek leaderboard screenshot ----
     leaderboard_page_path: str
     leaderboard_gw_param: str
@@ -234,6 +240,26 @@ def load_config() -> Config:
         report_gap_hours=env_float(
             "REPORT_GAP_HOURS",
             24.0,
+        ),
+
+        monitor_enabled=env_bool(
+            "MONITOR_ENABLED",
+            True,
+        ),
+
+        deadline_warning_hours=env_float(
+            "DEADLINE_WARNING_HOURS",
+            5.0,
+        ),
+
+        deadline_passed_max_age_hours=env_float(
+            "DEADLINE_PASSED_MAX_AGE_HOURS",
+            72.0,
+        ),
+
+        activity_period_days=env_int(
+            "ACTIVITY_PERIOD_DAYS",
+            7,
         ),
 
         leaderboard_page_path=(

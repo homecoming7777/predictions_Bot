@@ -15,6 +15,7 @@ from .backup_results import (
     find_final_result_for_match,
 )
 from .notify import send_email_report
+from .monitor import run_monitor
 
 
 def save_report(result, gameweek=None):
@@ -681,6 +682,17 @@ def main():
             result[
                 "website_latest_gameweek"
             ] = latest
+
+            # ---------------------------------------------------
+            # Activity / prediction-deadline monitor.
+            # Read-only. Runs on every bot run, before any import
+            # or result logic, and can never raise.
+            # ---------------------------------------------------
+            run_monitor(
+                site,
+                config,
+                result,
+            )
 
             gameweek_complete = (
                 check_and_apply_results(

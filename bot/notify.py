@@ -91,6 +91,12 @@ def build_report_message(result: dict) -> str:
             f"Gap to next kickoff: {result['report_gap_hours']:.1f}h"
         )
 
+    if result.get("monitor_report"):
+        lines.append("")
+        lines.append("-- ACTIVITY / DEADLINE MONITOR --")
+        lines.append(result["monitor_report"])
+        lines.append("")
+
     if result.get("message"):
         lines.append(result["message"])
 
@@ -131,6 +137,106 @@ def _attach_file(message: EmailMessage, path) -> None:
         subtype=subtype or "octet-stream",
         filename=file_path.name,
     )
+
+
+def _smtp_settings(config):
+    host = (getattr(config, "smtp_host", "") or "").strip()
+    port = int(getattr(config, "smtp_port", 587) or 587)
+    username = (getattr(config, "smtp_user", "") or "").strip()
+    password = getattr(config, "smtp_password", "") or ""
+    mail_from = (getattr(config, "email_from", "") or "").strip() or username
+    mail_to_raw = (getattr(config, "email_to", "") or "").strip()
+
+    recipients = [
+        address.strip()
+        for address in mail_to_raw.replace(";", ",").split(",")
+        if address.strip()
+    ]
+
+    return host, port, username, password, mail_from, recipients
+
+
+def _deliver(config, message, host, port, username, password):
+    context = ssl.create_default_context()
+
+    use_ssl = bool(getattr(config, "smtp_use_ssl", False)) or port == 465
+
+    if use_ssl:
+        with smtplib.SMTP_SSL(
+            host,
+            port,
+            context=context,
+            timeout=30,
+        ) as server:
+            if username:
+                server.login(username, password)
+
+            server.send_message(message)
+
+        return
+
+    with smtplib.SMTP(host, port, timeout=30) as server:
+        server.ehlo()
+
+        if bool(getattr(config, "smtp_use_tls", True)):
+            server.starttls(context=context)
+            server.ehlo()
+
+        if username:
+            server.login(username, password)
+
+        server.send_message(message)
+
+
+def send_simple_email(config, subject: str, body: str):
+    """
+    Send a standalone plain-text email using the SAME SMTP settings as
+    the existing run report. Used by the activity / deadline monitor.
+
+    Returns (sent: bool, detail: str). Never raises.
+    """
+
+    (
+        host,
+        port,
+        username,
+        password,
+        mail_from,
+        recipients,
+    ) = _smtp_settings(config)
+
+    if not host or not password or not mail_from or not recipients:
+        return False, (
+            "SMTP_HOST / SMTP_USER / SMTP_PASSWORD / EMAIL_TO not configured"
+        )
+
+    escaped = (
+        body.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = mail_from
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+
+    message.add_alternative(
+        "<html><body>"
+        '<pre style="font-family:Menlo,Consolas,monospace;'
+        'font-size:13px;line-height:1.5;white-space:pre-wrap;">'
+        + escaped
+        + "</pre></body></html>",
+        subtype="html",
+    )
+
+    try:
+        _deliver(config, message, host, port, username, password)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+    return True, ", ".join(recipients)
 
 
 def send_email_report(

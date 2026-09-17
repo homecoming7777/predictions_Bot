@@ -285,6 +285,58 @@ class Site:
 
         return data
 
+    def api_post(self, action, form=None):
+        """
+        POST to bot_api.php. Used by the monitor to atomically claim a
+        notification key so the same email is never sent twice.
+
+        Mirrors import_sql()'s InfinityFree retry behaviour.
+        """
+
+        params = {
+            "action": action,
+            "token": self.c.bot_api_token,
+        }
+
+        url = f"{self.c.api_url}?{urlencode(params)}"
+
+        response = self.context.request.post(
+            url,
+            form=form or {},
+            timeout=60000,
+        )
+
+        if not response.ok:
+            raise RuntimeError(
+                f"Website API HTTP error: {response.status}"
+            )
+
+        text = response.text().strip()
+
+        if "This site requires Javascript" in text:
+            self._goto(url)
+            response = self.context.request.post(
+                url,
+                form=form or {},
+                timeout=60000,
+            )
+            text = response.text().strip()
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "Website API returned non-JSON response: "
+                + text[:1500]
+            ) from exc
+
+        if not data.get("success"):
+            raise RuntimeError(
+                data.get("error", "Website API error")
+            )
+
+        return data
+
     def import_sql(self, gw, sql):
 
         params = {
