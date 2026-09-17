@@ -1,36 +1,31 @@
 """
-WhatsApp notifications.
+Notifications.
 
-1) Personal report -> CallMeBot (text only, unchanged behavior),
-   now gap-gated: suppressed while the gap between the last match of
-   the gameweek that just ended and the first match of the next
-   gameweek is bigger than WHATSAPP_GAP_HOURS.
-
-2) Group leaderboard screenshot -> Green API (supports groups + images,
-   which CallMeBot does not).
+The run report is delivered by EMAIL (SMTP), gap-gated: suppressed
+while the gap between the last match of the gameweek that just ended
+and the first match of the next gameweek is bigger than
+REPORT_GAP_HOURS.
 
 A failed or unconfigured send must never fail the bot run - every
 function here swallows its own errors and just records what happened
 onto the `result` dict for the JSON report.
 """
 
-from urllib.parse import quote
-
-import requests
-
-
-CALLMEBOT_URL = "https://api.callmebot.com/whatsapp.php"
-GREENAPI_BASE_URL = "https://api.green-api.com"
+import mimetypes
+import smtplib
+import ssl
+from email.message import EmailMessage
+from pathlib import Path
 
 
 def _fmt_gw(value):
     return f"GW{value}" if value is not None else "GW?"
 
 
-def build_whatsapp_message(result: dict) -> str:
+def build_report_message(result: dict) -> str:
     lines = []
 
-    lines.append("⚽ *Prediction Site Bot*")
+    lines.append("Prediction Site Bot")
     lines.append(f"Mode: {result.get('mode', '?')}")
     lines.append(f"Status: {result.get('status', '?')}")
 
@@ -62,8 +57,17 @@ def build_whatsapp_message(result: dict) -> str:
             lines.append(f"  Premier League pending: {pl_pending or 0}")
             lines.append(f"  Other Leagues pending: {other_pending or 0}")
 
+        if updated:
+            lines.append("Updated matches:")
+            for u in updated[:20]:
+                lines.append(
+                    f"  - {u.get('home_team')} "
+                    f"{u.get('home_score')}-{u.get('away_score')} "
+                    f"{u.get('away_team')}"
+                )
+
         if discrepancies:
-            lines.append("⚠️ Discrepancies found - blocked for safety:")
+            lines.append("Discrepancies found - blocked for safety:")
             for d in discrepancies[:5]:
                 lines.append(
                     f"  - {d.get('home_team')} vs {d.get('away_team')}: "
@@ -72,7 +76,7 @@ def build_whatsapp_message(result: dict) -> str:
 
     if result.get("next_gameweek_added") is not None:
         lines.append(
-            f"✅ {_fmt_gw(result['next_gameweek_added'])} imported and verified."
+            f"{_fmt_gw(result['next_gameweek_added'])} imported and verified."
         )
     elif (
         result.get("target_gameweek") is not None
@@ -82,123 +86,158 @@ def build_whatsapp_message(result: dict) -> str:
             f"{_fmt_gw(result['target_gameweek'])} already existed. No changes."
         )
 
-    if result.get("whatsapp_gap_hours") is not None:
+    if result.get("report_gap_hours") is not None:
         lines.append(
-            f"Gap to next kickoff: {result['whatsapp_gap_hours']:.1f}h"
+            f"Gap to next kickoff: {result['report_gap_hours']:.1f}h"
         )
 
     if result.get("message"):
         lines.append(result["message"])
 
     if result.get("error"):
-        lines.append(f"❌ Error: {result['error']}")
+        lines.append(f"Error: {result['error']}")
 
     return "\n".join(lines)
 
 
-def send_whatsapp_report(config, result: dict, allow: bool = True) -> None:
+def build_email_subject(result: dict) -> str:
+    gameweek = (
+        result.get("next_gameweek_added")
+        or result.get("target_gameweek")
+        or result.get("website_latest_gameweek")
+    )
+
+    return (
+        f"[FPL Bot] {_fmt_gw(gameweek)} - "
+        f"{result.get('status', 'UNKNOWN')}"
+    )
+
+
+def _attach_file(message: EmailMessage, path) -> None:
+    file_path = Path(path)
+
+    if not file_path.is_file():
+        return
+
+    guessed, _ = mimetypes.guess_type(file_path.name)
+
+    maintype, _, subtype = (
+        guessed or "application/octet-stream"
+    ).partition("/")
+
+    message.add_attachment(
+        file_path.read_bytes(),
+        maintype=maintype,
+        subtype=subtype or "octet-stream",
+        filename=file_path.name,
+    )
+
+
+def send_email_report(
+    config,
+    result: dict,
+    allow: bool = True,
+    attachments=None,
+) -> None:
     """
-    Send the personal CallMeBot report. Unchanged CallMeBot behavior,
-    except it is skipped (without touching anything else) when `allow`
-    is False - i.e. we are in the quiet gap between gameweeks.
+    Send the personal report by email. Skipped (without touching
+    anything else) when `allow` is False - i.e. we are in the quiet
+    gap between gameweeks.
     """
 
     if not allow:
-        result["whatsapp_sent"] = False
-        result["whatsapp_skipped_reason"] = (
+        result["email_sent"] = False
+        result["email_skipped_reason"] = (
             "Suppressed: gap to next kickoff is "
-            f"{result.get('whatsapp_gap_hours', '?')}h, "
-            f"above WHATSAPP_GAP_HOURS="
-            f"{getattr(config, 'whatsapp_gap_hours', 24)}h."
+            f"{result.get('report_gap_hours', '?')}h, "
+            f"above REPORT_GAP_HOURS="
+            f"{getattr(config, 'report_gap_hours', 24)}h."
         )
         return
 
-    phone = getattr(config, "whatsapp_phone", "") or ""
-    apikey = getattr(config, "whatsapp_apikey", "") or ""
+    host = (getattr(config, "smtp_host", "") or "").strip()
+    port = int(getattr(config, "smtp_port", 587) or 587)
+    username = (getattr(config, "smtp_user", "") or "").strip()
+    password = getattr(config, "smtp_password", "") or ""
+    mail_from = (getattr(config, "email_from", "") or "").strip() or username
+    mail_to_raw = (getattr(config, "email_to", "") or "").strip()
 
-    if not phone.strip() or not apikey.strip():
-        result["whatsapp_sent"] = False
-        result["whatsapp_skipped_reason"] = (
-            "WHATSAPP_PHONE/WHATSAPP_APIKEY not configured"
+    recipients = [
+        address.strip()
+        for address in mail_to_raw.replace(";", ",").split(",")
+        if address.strip()
+    ]
+
+    if not host or not password or not mail_from or not recipients:
+        result["email_sent"] = False
+        result["email_skipped_reason"] = (
+            "SMTP_HOST / SMTP_USER / SMTP_PASSWORD / EMAIL_TO "
+            "not configured"
         )
         return
 
-    message = build_whatsapp_message(result)
+    body = build_report_message(result)
 
-    url = (
-        f"{CALLMEBOT_URL}?phone={quote(phone.strip())}"
-        f"&text={quote(message)}"
-        f"&apikey={quote(apikey.strip())}"
+    escaped = (
+        body.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
     )
 
-    try:
-        response = requests.get(url, timeout=20)
-        response.raise_for_status()
-        result["whatsapp_sent"] = True
-    except Exception as exc:
-        result["whatsapp_sent"] = False
-        result["whatsapp_error"] = f"{type(exc).__name__}: {exc}"
+    message = EmailMessage()
+    message["Subject"] = build_email_subject(result)
+    message["From"] = mail_from
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
 
-
-def send_whatsapp_group_screenshot(
-    config,
-    gameweek,
-    image_path,
-    result: dict,
-) -> None:
-    """
-    Send the leaderboard screenshot to the WhatsApp GROUP via Green API
-    (https://green-api.com - free dev instance available).
-
-    Required env vars: GREENAPI_ID_INSTANCE, GREENAPI_API_TOKEN,
-    WHATSAPP_GROUP_ID (format: "1203630XXXXXXXXX@g.us").
-    """
-
-    id_instance = getattr(config, "greenapi_id_instance", "") or ""
-    api_token = getattr(config, "greenapi_api_token", "") or ""
-    group_id = getattr(config, "whatsapp_group_id", "") or ""
-
-    if not id_instance.strip() or not api_token.strip() or not group_id.strip():
-        result["group_screenshot_sent"] = False
-        result["group_screenshot_skipped_reason"] = (
-            "GREENAPI_ID_INSTANCE / GREENAPI_API_TOKEN / "
-            "WHATSAPP_GROUP_ID not configured"
-        )
-        return
-
-    url = (
-        f"{GREENAPI_BASE_URL}/waInstance{id_instance.strip()}"
-        f"/sendFileByUpload/{api_token.strip()}"
+    message.add_alternative(
+        "<html><body>"
+        '<pre style="font-family:Menlo,Consolas,monospace;'
+        'font-size:13px;line-height:1.5;white-space:pre-wrap;">'
+        + escaped
+        + "</pre></body></html>",
+        subtype="html",
     )
 
-    caption = f"🏆 *Leaderboard - GW{gameweek}*"
+    for path in (attachments or []):
+        try:
+            _attach_file(message, path)
+        except Exception:
+            pass
 
     try:
-        with open(image_path, "rb") as file_obj:
-            files = {
-                "file": (
-                    f"gameweek_{gameweek}_leaderboard.png",
-                    file_obj,
-                    "image/png",
-                )
-            }
+        context = ssl.create_default_context()
 
-            data = {
-                "chatId": group_id.strip(),
-                "caption": caption,
-            }
+        use_ssl = bool(getattr(config, "smtp_use_ssl", False)) or port == 465
 
-            response = requests.post(
-                url,
-                data=data,
-                files=files,
-                timeout=60,
-            )
+        if use_ssl:
+            with smtplib.SMTP_SSL(
+                host,
+                port,
+                context=context,
+                timeout=30,
+            ) as server:
+                if username:
+                    server.login(username, password)
 
-            response.raise_for_status()
+                server.send_message(message)
 
-        result["group_screenshot_sent"] = True
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as server:
+                server.ehlo()
+
+                if bool(getattr(config, "smtp_use_tls", True)):
+                    server.starttls(context=context)
+                    server.ehlo()
+
+                if username:
+                    server.login(username, password)
+
+                server.send_message(message)
+
+        result["email_sent"] = True
+        result["email_to"] = recipients
 
     except Exception as exc:
-        result["group_screenshot_sent"] = False
-        result["group_screenshot_error"] = f"{type(exc).__name__}: {exc}"
+        result["email_sent"] = False
+        result["email_error"] = f"{type(exc).__name__}: {exc}"

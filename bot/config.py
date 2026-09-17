@@ -36,6 +36,18 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+
+    if value is None or not value.strip():
+        return default
+
+    try:
+        return int(value.strip())
+    except ValueError:
+        return default
+
+
 def _join_url(base: str, path: str) -> str:
     return base.rstrip("/") + "/" + path.lstrip("/")
 
@@ -61,32 +73,34 @@ class Config:
 
     sportmonks_api_token: str
 
-    whatsapp_phone: str
-    whatsapp_apikey: str
+    # ---- email report ----
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    smtp_use_tls: bool
+    smtp_use_ssl: bool
+    email_from: str
+    email_to: str
 
-    # ---- gap-gating (personal WhatsApp report) ----
-    whatsapp_gap_hours: float
+    # ---- gap-gating (email report) ----
+    report_gap_hours: float
 
     # ---- gameweek leaderboard screenshot ----
     leaderboard_page_path: str
     leaderboard_gw_param: str
     leaderboard_table_selector: str
 
-    # ---- WhatsApp GROUP screenshot delivery (Green API) ----
-    greenapi_id_instance: str
-    greenapi_api_token: str
-    whatsapp_group_id: str
-
     @property
     def sportmonks_enabled(self) -> bool:
         return bool(self.sportmonks_api_token.strip())
 
     @property
-    def group_screenshot_enabled(self) -> bool:
+    def email_enabled(self) -> bool:
         return bool(
-            self.greenapi_id_instance.strip()
-            and self.greenapi_api_token.strip()
-            and self.whatsapp_group_id.strip()
+            self.smtp_host.strip()
+            and self.smtp_password.strip()
+            and self.email_to.strip()
         )
 
     @property
@@ -176,18 +190,49 @@ def load_config() -> Config:
             or ""
         ).strip(),
 
-        whatsapp_phone=(
-            os.getenv("WHATSAPP_PHONE")
+        smtp_host=(
+            os.getenv("SMTP_HOST")
+            or "smtp.gmail.com"
+        ).strip(),
+
+        smtp_port=env_int(
+            "SMTP_PORT",
+            587,
+        ),
+
+        smtp_user=(
+            os.getenv("SMTP_USER")
             or ""
         ).strip(),
 
-        whatsapp_apikey=(
-            os.getenv("WHATSAPP_APIKEY")
+        smtp_password=(
+            os.getenv("SMTP_PASSWORD")
+            or ""
+        ),
+
+        smtp_use_tls=env_bool(
+            "SMTP_USE_TLS",
+            True,
+        ),
+
+        smtp_use_ssl=env_bool(
+            "SMTP_USE_SSL",
+            False,
+        ),
+
+        email_from=(
+            os.getenv("EMAIL_FROM")
+            or os.getenv("SMTP_USER")
             or ""
         ).strip(),
 
-        whatsapp_gap_hours=env_float(
-            "WHATSAPP_GAP_HOURS",
+        email_to=(
+            os.getenv("EMAIL_TO")
+            or ""
+        ).strip(),
+
+        report_gap_hours=env_float(
+            "REPORT_GAP_HOURS",
             24.0,
         ),
 
@@ -204,20 +249,5 @@ def load_config() -> Config:
         leaderboard_table_selector=(
             os.getenv("LEADERBOARD_TABLE_SELECTOR")
             or "table"
-        ).strip(),
-
-        greenapi_id_instance=(
-            os.getenv("GREENAPI_ID_INSTANCE")
-            or ""
-        ).strip(),
-
-        greenapi_api_token=(
-            os.getenv("GREENAPI_API_TOKEN")
-            or ""
-        ).strip(),
-
-        whatsapp_group_id=(
-            os.getenv("WHATSAPP_GROUP_ID")
-            or ""
         ).strip(),
     )
